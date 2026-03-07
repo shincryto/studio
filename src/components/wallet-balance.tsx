@@ -17,8 +17,8 @@ export function WalletBalance() {
       if (account?.address) {
         setLoading(true);
         try {
-          const accountInfo = await aptos.getAccountInfo({ accountAddress: account.address });
-          setAptBalance(Number(accountInfo.balance) / 10 ** 8);
+          const amount = await aptos.getAccountAPTAmount({ accountAddress: account.address });
+          setAptBalance(amount / 10 ** 8);
         } catch (error) {
           console.error('Failed to fetch balance:', error);
           setAptBalance(null);
