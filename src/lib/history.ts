@@ -2,6 +2,7 @@ export type UploadEntry = {
   txHash: string;
   filename: string;
   timestamp: string;
+  accountAddress: string;
 };
 
 const HISTORY_KEY = 'shelby_upload_history';

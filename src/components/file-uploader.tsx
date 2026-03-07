@@ -9,7 +9,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useWallet, type InputTransactionData } from '@aptos-labs/wallet-adapter-react';
 import { addToHistory } from '@/lib/history';
 import { aptos } from '@/lib/aptos';
-import shelbyClient from '@/lib/shelby';
+import getShelbyClient from '@/lib/shelby';
 
 // Imports from SDK/browser
 import {
@@ -45,6 +45,20 @@ export function FileUploader() {
         variant: 'destructive',
         title: 'Wallet not connected',
         description: 'Please connect your wallet to upload files.',
+      });
+      return;
+    }
+    
+    const shelbyClient = getShelbyClient();
+    if (!shelbyClient) {
+      const err = 'Shelby client could not be initialized. This action is only available in the browser.';
+      console.error(err);
+      setError(err);
+      setStatus('error');
+      toast({
+        variant: 'destructive',
+        title: 'Upload Failed',
+        description: err,
       });
       return;
     }
@@ -95,6 +109,7 @@ export function FileUploader() {
       addToHistory({
         filename: file.name,
         txHash: pendingTx.hash,
+        accountAddress: account.address,
       });
 
       resetState();

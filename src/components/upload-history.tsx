@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button';
 import { getHistory, type UploadEntry } from '@/lib/history';
 import { formatDistanceToNow } from 'date-fns';
-import { ExternalLink, FileText, History } from 'lucide-react';
+import { ExternalLink, FileText, History, Download } from 'lucide-react';
 
 const EXPLORER_URL = 'https://explorer.aptoslabs.com/txn/{txHash}?network=testnet';
 
@@ -53,6 +53,21 @@ export function UploadHistory() {
                     {formatDistanceToNow(new Date(entry.timestamp), { addSuffix: true })}
                   </TableCell>
                   <TableCell className="text-right space-x-2">
+                     <Button
+                      variant="ghost"
+                      size="icon"
+                      asChild
+                      disabled={!entry.accountAddress}
+                    >
+                      <a 
+                        href={`https://api.testnet.shelby.xyz/shelby/v1/blobs/${entry.accountAddress}/${entry.filename}`}
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        title="Download File"
+                      >
+                        <Download className="h-4 w-4" />
+                      </a>
+                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"
