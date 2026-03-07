@@ -17,12 +17,6 @@ export const AppProviders: FC<PropsWithChildren> = ({ children }) => {
       <AptosWalletAdapterProvider 
         plugins={wallets} 
         autoConnect={true}
-        dappConfig={{
-          network: Network.TESTNET,
-          aptosApiKeys: {
-            testnet: process.env.NEXT_PUBLIC_APTOS_TESTNET_API_KEY,
-          }
-        }}
         onError={(error) => {
           console.error("Wallet connection error:", error);
         }}

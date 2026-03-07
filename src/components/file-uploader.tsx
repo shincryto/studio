@@ -32,7 +32,7 @@ export function FileUploader() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  const { connected, signAndSubmitTransaction, account } = useWallet();
+  const { connected, signTransaction, account } = useWallet();
   const { toast } = useToast();
 
   const resetState = useCallback(() => {
@@ -79,7 +79,8 @@ export function FileUploader() {
       });
 
       const transaction: InputTransactionData = { data: payload };
-      const pendingTx = await signAndSubmitTransaction(transaction);
+      const signedTransaction = await signTransaction(transaction);
+      const pendingTx = await aptos.submitTransaction({ transaction: signedTransaction });
       await aptos.waitForTransaction({ transactionHash: pendingTx.hash });
 
       // Step 3: Multipart RPC Upload
