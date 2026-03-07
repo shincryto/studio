@@ -1,4 +1,9 @@
 import { Aptos, AptosConfig, Network } from "@aptos-labs/ts-sdk";
 
-const aptosConfig = new AptosConfig({ network: Network.TESTNET });
+const aptosConfig = new AptosConfig({ 
+  network: Network.TESTNET,
+  clientConfig: {
+    API_KEY: process.env.NEXT_PUBLIC_APTOS_TESTNET_API_KEY,
+  },
+});
 export const aptos = new Aptos(aptosConfig);

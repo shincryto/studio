@@ -1,7 +1,5 @@
 export type UploadEntry = {
-  id: string;
   txHash: string;
-  link: string;
   filename: string;
   timestamp: string;
 };
@@ -19,11 +17,12 @@ export function getHistory(): UploadEntry[] {
   }
 }
 
-export function addToHistory(entry: UploadEntry) {
+export function addToHistory(entry: Omit<UploadEntry, 'timestamp'>) {
   if (typeof window === 'undefined') return;
   const history = getHistory();
+  const newEntry = { ...entry, timestamp: new Date().toISOString() };
   // Add to the beginning of the array and keep the last 100 entries
-  const newHistory = [entry, ...history].slice(0, 100);
+  const newHistory = [newEntry, ...history].slice(0, 100);
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistory));
     window.dispatchEvent(new Event('storage')); // Dispatch event to notify other components

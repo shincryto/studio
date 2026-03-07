@@ -6,14 +6,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button';
 import { getHistory, type UploadEntry } from '@/lib/history';
 import { formatDistanceToNow } from 'date-fns';
-import { Download, ExternalLink, FileText, History } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
+import { ExternalLink, FileText, History } from 'lucide-react';
 
 const EXPLORER_URL = 'https://explorer.aptoslabs.com/txn/{txHash}?network=testnet';
 
 export function UploadHistory() {
   const [history, setHistory] = useState<UploadEntry[]>([]);
-  const { toast } = useToast();
 
   useEffect(() => {
     const loadHistory = () => setHistory(getHistory());
@@ -23,11 +21,6 @@ export function UploadHistory() {
     window.addEventListener('storage', loadHistory);
     return () => window.removeEventListener('storage', loadHistory);
   }, []);
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast({ title: 'Copied link to clipboard!' });
-  };
 
   return (
     <Card>
@@ -49,7 +42,7 @@ export function UploadHistory() {
             </TableHeader>
             <TableBody>
               {history.map(entry => (
-                <TableRow key={entry.id}>
+                <TableRow key={entry.txHash}>
                   <TableCell>
                     <div className="font-medium truncate max-w-xs">{entry.filename}</div>
                     <div className="text-sm text-muted-foreground md:hidden">
@@ -60,15 +53,6 @@ export function UploadHistory() {
                     {formatDistanceToNow(new Date(entry.timestamp), { addSuffix: true })}
                   </TableCell>
                   <TableCell className="text-right space-x-2">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      asChild
-                    >
-                      <a href={entry.link} target="_blank" rel="noopener noreferrer" title="Download File (mock)">
-                        <Download className="h-4 w-4" />
-                      </a>
-                    </Button>
                     <Button
                       variant="ghost"
                       size="icon"

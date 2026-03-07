@@ -2,30 +2,33 @@
 
 import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { UploadCloud, File as FileIcon, X, Loader, Copy, Check, Tag, BrainCircuit, ExternalLink } from 'lucide-react';
+import { UploadCloud, File as FileIcon, X, Loader } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
-import { getFileTags } from '@/lib/actions';
-import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
-import { useWallet } from '@aptos-labs/wallet-adapter-react';
+import { useWallet, type InputTransactionData } from '@aptos-labs/wallet-adapter-react';
 import { addToHistory } from '@/lib/history';
 import { aptos } from '@/lib/aptos';
-import { AccountAddress, PublicKey, RawTransaction } from '@aptos-labs/ts-sdk';
 import shelbyClient from '@/lib/shelby';
 
-type UploadStatus = 'idle' | 'estimating' | 'confirming' | 'uploading' | 'tagging' | 'success' | 'error';
-type UploadResult = { id: string; link: string; txHash: string };
+// Imports from SDK/browser
+import {
+  generateCommitments,
+  createDefaultErasureCodingProvider,
+  expectedTotalChunksets,
+  ShelbyBlobClient,
+} from "@shelby-protocol/sdk/browser";
+
+// Buffer for browser
+import { Buffer } from 'buffer';
+
+
+type UploadStatus = 'idle' | 'encoding' | 'registering' | 'uploading' | 'success' | 'error';
 
 export function FileUploader() {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<UploadStatus>('idle');
-  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [estimatedGas, setEstimatedGas] = useState<number | null>(null);
-  const [uploadPayload, setUploadPayload] = useState<{ payload: RawTransaction; uploaderId: string } | null>(null);
 
   const { connected, signAndSubmitTransaction, account } = useWallet();
   const { toast } = useToast();
@@ -33,74 +36,73 @@ export function FileUploader() {
   const resetState = useCallback(() => {
     setFile(null);
     setStatus('idle');
-    setProgress(0);
     setError(null);
-    setEstimatedGas(null);
-    setUploadPayload(null);
   }, []);
 
-  const handleEstimateGas = async () => {
-    if (!file || !connected || !account) return;
-    setStatus('estimating');
-    try {
-      // Get the transaction payload from the Shelby SDK for accurate estimation
-      const { payload, uploaderId } = await shelbyClient.prepareUpload({ file });
-      setUploadPayload({ payload, uploaderId });
-      
-      const senderPublicKey = new PublicKey(account.publicKey);
-      const [simulation] = await aptos.transaction.simulate.simple({
-        signerPublicKey: senderPublicKey,
-        transaction: payload,
-      });
-      setEstimatedGas(Number(simulation.gas_used) / 10**8);
-      setStatus('confirming');
-    } catch (e) {
-      const err = e instanceof Error ? e.message : "Could not estimate gas fees.";
-      setError(err);
-      setStatus('error');
-      toast({ variant: 'destructive', title: 'Estimation Failed', description: err });
-    }
-  };
-
   const handleUpload = async () => {
-    if (!file || !uploadPayload) return;
+    if (!file || !account) {
+      toast({
+        variant: 'destructive',
+        title: 'Wallet not connected',
+        description: 'Please connect your wallet to upload files.',
+      });
+      return;
+    }
 
-    setStatus('uploading');
+    setStatus('encoding');
     setError(null);
-    setProgress(0);
 
     try {
-      // Sign and submit the transaction prepared during the estimation step
-      const pendingTx = await signAndSubmitTransaction(uploadPayload.payload);
+      // Step 1: File Encoding
+      const fileBuffer = Buffer.from(await file.arrayBuffer());
+      const provider = await createDefaultErasureCodingProvider();
+      const commitments = await generateCommitments(provider, fileBuffer);
+
+      // Step 2: On-Chain Registration
+      setStatus('registering');
+      // Expiration set to 30 days from now in microseconds
+      const expirationMicroseconds = (Date.now() + 30 * 24 * 60 * 60 * 1000) * 1000;
       
-      // Execute the upload with the transaction hash
-      const { id, link } = await shelbyClient.executeUpload({
-        uploaderId: uploadPayload.uploaderId,
-        txHash: pendingTx.hash,
-        onProgress: setProgress,
+      const payload = ShelbyBlobClient.createRegisterBlobPayload({
+        account: account.address,
+        blobName: file.name,
+        blobMerkleRoot: commitments.blob_merkle_root,
+        numChunksets: expectedTotalChunksets(commitments.raw_data_size),
+        expirationMicros: BigInt(expirationMicroseconds),
+        blobSize: BigInt(commitments.raw_data_size),
       });
 
-      const uploadResult = { id, link, txHash: pendingTx.hash };
+      const transaction: InputTransactionData = { data: payload };
+      const pendingTx = await signAndSubmitTransaction(transaction);
+      await aptos.waitForTransaction({ transactionHash: pendingTx.hash });
 
-      setStatus('tagging');
+      // Step 3: RPC Upload
+      setStatus('uploading');
+      await shelbyClient.rpc.putBlob({
+        account: account.address,
+        blobName: file.name,
+        blobData: new Uint8Array(fileBuffer),
+      });
+
+      // Success
+      setStatus('success');
       toast({
         title: 'Upload Successful',
-        description: `File stored. Now generating AI tags...`,
+        description: `${file.name} has been stored on Shelby.`,
       });
 
       // Add to history
-      const newEntry = {
-        ...uploadResult,
+      addToHistory({
         filename: file.name,
-        timestamp: new Date().toISOString(),
-      };
-      addToHistory(newEntry);
+        txHash: pendingTx.hash,
+      });
 
       resetState();
       setStatus('success');
 
     } catch (e) {
       const err = e instanceof Error ? e.message : 'An unknown error occurred.';
+      console.error('Upload failed:', e);
       setError(err);
       setStatus('error');
       toast({
@@ -120,20 +122,21 @@ export function FileUploader() {
   }, [status, resetState]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, multiple: false, disabled: !connected });
+  
+  const isProcessing = status === 'encoding' || status === 'registering' || status === 'uploading';
 
-  if (status === 'uploading' || status === 'estimating' || status === 'tagging') {
+  if (isProcessing) {
+    let statusText = 'Processing...';
+    if (status === 'encoding') statusText = 'Encoding file...';
+    if (status === 'registering') statusText = 'Registering on-chain...';
+    if (status === 'uploading') statusText = 'Uploading to Shelby...';
+    
     return (
       <Card className="w-full">
         <CardContent className="p-10 text-center space-y-4">
           <Loader className="mx-auto h-12 w-12 animate-spin text-primary" />
-          <h3 className="text-2xl font-headline">
-            {status === 'estimating' ? 'Estimating Gas...' :
-             status === 'tagging' ? 'Finalizing & Tagging...' :
-             'Uploading...'}
-          </h3>
+          <h3 className="text-2xl font-headline">{statusText}</h3>
           <p className="text-muted-foreground break-all">{file?.name}</p>
-          {(status === 'uploading' || status === 'tagging') && <Progress value={progress} className="w-full" />}
-          {(status === 'uploading' || status === 'tagging') && <p className="text-sm font-mono text-accent">{Math.round(progress)}%</p>}
         </CardContent>
       </Card>
     );
@@ -158,31 +161,13 @@ export function FileUploader() {
             </Button>
           </div>
           
-          {status === 'confirming' && estimatedGas !== null && (
-            <div className="mt-4 p-4 rounded-lg bg-background border space-y-4">
-              <h4 className="font-medium">Confirm Upload</h4>
-              <div className="flex justify-between items-center text-sm">
-                <span className="text-muted-foreground">Estimated Gas Fee</span>
-                <span className="font-mono">{estimatedGas.toFixed(6)} APT</span>
-              </div>
-              <div className="flex gap-2">
-                <Button onClick={handleUpload} className="w-full" size="lg">Confirm & Upload</Button>
-                <Button onClick={resetState} className="w-full" size="lg" variant="outline">Cancel</Button>
-              </div>
-            </div>
+          {status === 'error' && (
+            <p className="mt-2 text-sm text-destructive">{error}</p>
           )}
 
-          {status !== 'confirming' && (
-            <>
-              {status === 'error' && (
-                <p className="mt-2 text-sm text-destructive">{error}</p>
-              )}
-              <Button onClick={handleEstimateGas} className="w-full mt-4" size="lg">
-                Upload to Shelby
-              </Button>
-            </>
-          )}
-
+          <Button onClick={handleUpload} className="w-full mt-4" size="lg" disabled={!connected}>
+            Upload to Shelby
+          </Button>
         </CardContent>
       </Card>
     );
