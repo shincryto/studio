@@ -5,11 +5,11 @@ import { useDropzone } from 'react-dropzone';
 import { UploadCloud, File as FileIcon, X, Loader } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
 import { useToast } from '@/hooks/use-toast';
 import { useWallet, type InputTransactionData } from '@aptos-labs/wallet-adapter-react';
 import { addToHistory } from '@/lib/history';
 import { aptos } from '@/lib/aptos';
-import getShelbyClient from '@/lib/shelby';
 
 // Imports from SDK/browser
 import {
@@ -22,12 +22,14 @@ import {
 // Buffer for browser
 import { Buffer } from 'buffer';
 
-
 type UploadStatus = 'idle' | 'encoding' | 'registering' | 'uploading' | 'success' | 'error';
+const PART_SIZE = 1024 * 1024 * 5; // 5 MB part size
 
 export function FileUploader() {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<UploadStatus>('idle');
+  const [statusText, setStatusText] = useState('');
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const { connected, signAndSubmitTransaction, account } = useWallet();
@@ -37,6 +39,8 @@ export function FileUploader() {
     setFile(null);
     setStatus('idle');
     setError(null);
+    setProgress(0);
+    setStatusText('');
   }, []);
 
   const handleUpload = async () => {
@@ -49,32 +53,20 @@ export function FileUploader() {
       return;
     }
     
-    const shelbyClient = getShelbyClient();
-    if (!shelbyClient) {
-      const err = 'Shelby client could not be initialized. This action is only available in the browser.';
-      console.error(err);
-      setError(err);
-      setStatus('error');
-      toast({
-        variant: 'destructive',
-        title: 'Upload Failed',
-        description: err,
-      });
-      return;
-    }
-
     setStatus('encoding');
+    setStatusText('Encoding file for on-chain registration...');
+    setProgress(0);
     setError(null);
 
     try {
-      // Step 1: File Encoding
+      // Step 1: File Encoding for on-chain registration
       const fileBuffer = Buffer.from(await file.arrayBuffer());
       const provider = await createDefaultErasureCodingProvider();
       const commitments = await generateCommitments(provider, fileBuffer);
 
       // Step 2: On-Chain Registration
       setStatus('registering');
-      // Expiration set to 30 days from now in microseconds
+      setStatusText('Registering file on the Aptos blockchain...');
       const expirationMicroseconds = (Date.now() + 30 * 24 * 60 * 60 * 1000) * 1000;
       
       const payload = ShelbyBlobClient.createRegisterBlobPayload({
@@ -90,13 +82,61 @@ export function FileUploader() {
       const pendingTx = await signAndSubmitTransaction(transaction);
       await aptos.waitForTransaction({ transactionHash: pendingTx.hash });
 
-      // Step 3: RPC Upload
+      // Step 3: Multipart RPC Upload
       setStatus('uploading');
-      await shelbyClient.rpc.putBlob({
-        account: account.address,
-        blobName: file.name,
-        blobData: new Uint8Array(fileBuffer),
+      const shelbyApiBase = 'https://api.testnet.shelby.xyz/shelby/v1';
+
+      // 3a: Begin session
+      setStatusText('Initializing upload session...');
+      const beginResponse = await fetch(`${shelbyApiBase}/multipart-uploads`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account: account.address,
+          blobName: file.name,
+          partSize: PART_SIZE,
+        }),
       });
+
+      if (!beginResponse.ok) {
+        throw new Error(`Failed to begin multipart upload: ${await beginResponse.text()}`);
+      }
+      const { uploadId } = await beginResponse.json();
+      if (!uploadId) {
+        throw new Error('Could not retrieve a multipart upload ID.');
+      }
+      
+      // 3b: Upload parts
+      const totalParts = Math.ceil(fileBuffer.length / PART_SIZE);
+      for (let i = 0; i < totalParts; i++) {
+        const start = i * PART_SIZE;
+        const end = start + PART_SIZE;
+        const part = fileBuffer.slice(start, end);
+        
+        setStatusText(`Uploading part ${i + 1} of ${totalParts}...`);
+        
+        const partResponse = await fetch(`${shelbyApiBase}/multipart-uploads/${uploadId}/parts/${i}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: part,
+        });
+
+        if (!partResponse.ok) {
+          throw new Error(`Failed to upload part ${i + 1}: ${await partResponse.text()}`);
+        }
+        
+        setProgress(((i + 1) / totalParts) * 100);
+      }
+
+      // 3c: Complete session
+      setStatusText('Finalizing upload...');
+      const completeResponse = await fetch(`${shelbyApiBase}/multipart-uploads/${uploadId}/complete`, {
+        method: 'POST',
+      });
+
+      if (!completeResponse.ok) {
+        throw new Error(`Failed to complete multipart upload: ${await completeResponse.text()}`);
+      }
 
       // Success
       setStatus('success');
@@ -105,15 +145,13 @@ export function FileUploader() {
         description: `${file.name} has been stored on Shelby.`,
       });
 
-      // Add to history
       addToHistory({
         filename: file.name,
         txHash: pendingTx.hash,
         accountAddress: account.address,
       });
 
-      resetState();
-      setStatus('success');
+      setTimeout(resetState, 1000);
 
     } catch (e) {
       const err = e instanceof Error ? e.message : 'An unknown error occurred.';
@@ -141,17 +179,18 @@ export function FileUploader() {
   const isProcessing = status === 'encoding' || status === 'registering' || status === 'uploading';
 
   if (isProcessing) {
-    let statusText = 'Processing...';
-    if (status === 'encoding') statusText = 'Encoding file...';
-    if (status === 'registering') statusText = 'Registering on-chain...';
-    if (status === 'uploading') statusText = 'Uploading to Shelby...';
-    
     return (
       <Card className="w-full">
         <CardContent className="p-10 text-center space-y-4">
           <Loader className="mx-auto h-12 w-12 animate-spin text-primary" />
           <h3 className="text-2xl font-headline">{statusText}</h3>
           <p className="text-muted-foreground break-all">{file?.name}</p>
+           {status === 'uploading' && (
+            <div className="pt-4">
+              <Progress value={progress} />
+              <p className="text-sm text-muted-foreground mt-2">{progress.toFixed(0)}%</p>
+            </div>
+          )}
         </CardContent>
       </Card>
     );
