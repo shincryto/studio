@@ -52,19 +52,25 @@ export function ConnectWalletButton() {
     );
   }
 
+  const petraWallet = wallets.find(wallet => wallet.name === 'Petra');
+
+  const handleConnect = () => {
+    if (petraWallet) {
+      connect(petraWallet.name);
+    } else {
+      toast({
+        variant: 'destructive',
+        title: 'Petra Wallet not found',
+        description: 'Please install the Petra Wallet extension.',
+      });
+      window.open('https://petra.app/', '_blank');
+    }
+  };
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button>Connect Wallet</Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        {wallets.map(wallet => (
-          <DropdownMenuItem key={wallet.name} onClick={() => connect(wallet.name)}>
-            <img src={wallet.icon} alt={wallet.name} width={24} height={24} className="mr-2" />
-            Connect {wallet.name}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Button onClick={handleConnect}>
+      {petraWallet && <img src={petraWallet.icon} alt={petraWallet.name} width={24} height={24} className="mr-2" />}
+      Connect Petra
+    </Button>
   );
 }
