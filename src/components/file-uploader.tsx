@@ -13,56 +13,11 @@ import { Separator } from '@/components/ui/separator';
 import { useWallet } from '@aptos-labs/wallet-adapter-react';
 import { addToHistory } from '@/lib/history';
 import { aptos } from '@/lib/aptos';
-import { AccountAddress, PublicKey } from '@aptos-labs/ts-sdk';
+import { AccountAddress, PublicKey, RawTransaction } from '@aptos-labs/ts-sdk';
+import shelbyClient from '@/lib/shelby';
 
 type UploadStatus = 'idle' | 'estimating' | 'confirming' | 'uploading' | 'tagging' | 'success' | 'error';
 type UploadResult = { id: string; link: string; txHash: string };
-
-// This is a mock of the Shelby Protocol SDK to demonstrate the upload flow.
-const mockShelbyUpload = async ({
-  file,
-  onProgress,
-  signer,
-}: {
-  file: File;
-  onProgress: (progress: number) => void;
-  signer: (transaction: any) => Promise<any>;
-}) => {
-  // In a real app, you would construct a transaction for the Shelby Protocol
-  // then ask the user to sign it.
-  const mockTransaction = {
-    data: {
-      function: `0x42::example_module::upload`,
-      functionArguments: [file.name, file.size],
-    },
-  };
-  
-  // This would be a real signature
-  // const signedTx = await signer(mockTransaction);
-
-  return new Promise<UploadResult>((resolve, reject) => {
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress += Math.random() * 20;
-      if (progress > 100) progress = 100;
-      onProgress(progress);
-
-      if (progress >= 100) {
-        clearInterval(interval);
-        setTimeout(() => {
-          const fileId = `shby-${crypto.randomUUID()}`;
-          // Generate a fake but valid-looking testnet transaction hash
-          const txHash = `0x${[...Array(64)].map(() => Math.floor(Math.random() * 16).toString(16)).join('')}`;
-          resolve({
-            id: fileId,
-            link: `https://shelby.io/v/${fileId}/${file.name}`,
-            txHash,
-          });
-        }, 500);
-      }
-    }, 200);
-  });
-};
 
 export function FileUploader() {
   const [file, setFile] = useState<File | null>(null);
@@ -70,6 +25,7 @@ export function FileUploader() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [estimatedGas, setEstimatedGas] = useState<number | null>(null);
+  const [uploadPayload, setUploadPayload] = useState<{ payload: RawTransaction; uploaderId: string } | null>(null);
 
   const { connected, signAndSubmitTransaction, account } = useWallet();
   const { toast } = useToast();
@@ -80,25 +36,21 @@ export function FileUploader() {
     setProgress(0);
     setError(null);
     setEstimatedGas(null);
+    setUploadPayload(null);
   }, []);
 
   const handleEstimateGas = async () => {
     if (!file || !connected || !account) return;
     setStatus('estimating');
     try {
-      // A real app would simulate the actual upload transaction.
-      // For this demo, we simulate a simple 0-APT transfer to self.
-      const transaction = await aptos.transaction.build.simple({
-        sender: account.address,
-        data: {
-          function: "0x1::aptos_account::transfer",
-          functionArguments: [account.address, 0],
-        },
-      });
+      // Get the transaction payload from the Shelby SDK for accurate estimation
+      const { payload, uploaderId } = await shelbyClient.prepareUpload({ file });
+      setUploadPayload({ payload, uploaderId });
+      
       const senderPublicKey = new PublicKey(account.publicKey);
       const [simulation] = await aptos.transaction.simulate.simple({
         signerPublicKey: senderPublicKey,
-        transaction,
+        transaction: payload,
       });
       setEstimatedGas(Number(simulation.gas_used) / 10**8);
       setStatus('confirming');
@@ -111,21 +63,24 @@ export function FileUploader() {
   };
 
   const handleUpload = async () => {
-    if (!file) return;
+    if (!file || !uploadPayload) return;
 
     setStatus('uploading');
     setError(null);
     setProgress(0);
 
     try {
-      // The `signAndSubmitTransaction` from the wallet adapter would be used here.
-      // As we are mocking, we'll pass a dummy signer function.
-      const dummySigner = async (tx: any) => ({ signature: 'mock_signature' });
-      const uploadResult = await mockShelbyUpload({
-        file,
+      // Sign and submit the transaction prepared during the estimation step
+      const pendingTx = await signAndSubmitTransaction(uploadPayload.payload);
+      
+      // Execute the upload with the transaction hash
+      const { id, link } = await shelbyClient.executeUpload({
+        uploaderId: uploadPayload.uploaderId,
+        txHash: pendingTx.hash,
         onProgress: setProgress,
-        signer: dummySigner as any,
       });
+
+      const uploadResult = { id, link, txHash: pendingTx.hash };
 
       setStatus('tagging');
       toast({
@@ -141,8 +96,6 @@ export function FileUploader() {
       };
       addToHistory(newEntry);
 
-      // We no longer show a big success screen here, history component handles it.
-      // We'll reset the uploader to allow for another upload.
       resetState();
       setStatus('success');
 
