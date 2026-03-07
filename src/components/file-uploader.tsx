@@ -13,7 +13,7 @@ import { Separator } from '@/components/ui/separator';
 import { useWallet } from '@aptos-labs/wallet-adapter-react';
 import { addToHistory } from '@/lib/history';
 import { aptos } from '@/lib/aptos';
-import { AccountAddress } from '@aptos-labs/ts-sdk';
+import { AccountAddress, PublicKey } from '@aptos-labs/ts-sdk';
 
 type UploadStatus = 'idle' | 'estimating' | 'confirming' | 'uploading' | 'tagging' | 'success' | 'error';
 type UploadResult = { id: string; link: string; txHash: string };
@@ -71,7 +71,7 @@ export function FileUploader() {
   const [error, setError] = useState<string | null>(null);
   const [estimatedGas, setEstimatedGas] = useState<number | null>(null);
 
-  const { connected, signAndSubmitTransaction } = useWallet();
+  const { connected, signAndSubmitTransaction, account } = useWallet();
   const { toast } = useToast();
 
   const resetState = useCallback(() => {
@@ -83,20 +83,21 @@ export function FileUploader() {
   }, []);
 
   const handleEstimateGas = async () => {
-    if (!file || !connected) return;
+    if (!file || !connected || !account) return;
     setStatus('estimating');
     try {
-      // For estimation, we simulate a simple transaction like a 0-APT transfer.
-      // A real app would simulate the actual transaction for the protocol.
+      // A real app would simulate the actual upload transaction.
+      // For this demo, we simulate a simple 0-APT transfer to self.
       const transaction = await aptos.transaction.build.simple({
-        sender: AccountAddress.ONE, // Use a dummy address for simulation
+        sender: account.address,
         data: {
           function: "0x1::aptos_account::transfer",
-          functionArguments: [AccountAddress.ONE, 0],
+          functionArguments: [account.address, 0],
         },
       });
+      const senderPublicKey = new PublicKey(account.publicKey);
       const [simulation] = await aptos.transaction.simulate.simple({
-        signerPublicKey: AccountAddress.ONE, // Dummy public key
+        signerPublicKey: senderPublicKey,
         transaction,
       });
       setEstimatedGas(Number(simulation.gas_used) / 10**8);
