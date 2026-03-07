@@ -2,17 +2,28 @@
 import type { FC, PropsWithChildren } from 'react';
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from '@/components/theme-provider';
+import { AptosWalletAdapterProvider } from '@aptos-labs/wallet-adapter-react';
+import { PetraWallet } from 'petra-plugin-wallet-adapter';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+const queryClient = new QueryClient();
 
 export const AppProviders: FC<PropsWithChildren> = ({ children }) => {
+  const wallets = [new PetraWallet()];
+  
   return (
-    <ThemeProvider
-      attribute="class"
-      defaultTheme="dark"
-      enableSystem
-      disableTransitionOnChange
-    >
-      {children}
-      <Toaster />
-    </ThemeProvider>
+    <QueryClientProvider client={queryClient}>
+      <AptosWalletAdapterProvider plugins={wallets} autoConnect={true}>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="dark"
+          enableSystem
+          disableTransitionOnChange
+        >
+          {children}
+          <Toaster />
+        </ThemeProvider>
+      </AptosWalletAdapterProvider>
+    </QueryClientProvider>
   );
 };

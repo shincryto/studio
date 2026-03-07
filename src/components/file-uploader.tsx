@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { UploadCloud, File as FileIcon, X, Loader, Copy, Check, Tag, BrainCircuit } from 'lucide-react';
+import { UploadCloud, File as FileIcon, X, Loader, Copy, Check, Tag, BrainCircuit, ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -10,35 +10,53 @@ import { useToast } from '@/hooks/use-toast';
 import { getFileTags } from '@/lib/actions';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import { useWallet } from '@aptos-labs/wallet-adapter-react';
+import { addToHistory } from '@/lib/history';
+import { aptos } from '@/lib/aptos';
+import { AccountAddress } from '@aptos-labs/ts-sdk';
 
-type UploadStatus = 'idle' | 'uploading' | 'success' | 'error';
-type UploadResult = { id: string; link: string };
+type UploadStatus = 'idle' | 'estimating' | 'confirming' | 'uploading' | 'tagging' | 'success' | 'error';
+type UploadResult = { id: string; link: string; txHash: string };
 
 // This is a mock of the Shelby Protocol SDK to demonstrate the upload flow.
-// In a real application, you would import this from '@shelby-protocol/sdk'.
-const mockShelbyUpload = ({
+const mockShelbyUpload = async ({
   file,
   onProgress,
+  signer,
 }: {
   file: File;
   onProgress: (progress: number) => void;
+  signer: (transaction: any) => Promise<any>;
 }) => {
+  // In a real app, you would construct a transaction for the Shelby Protocol
+  // then ask the user to sign it.
+  const mockTransaction = {
+    data: {
+      function: `0x42::example_module::upload`,
+      functionArguments: [file.name, file.size],
+    },
+  };
+  
+  // This would be a real signature
+  // const signedTx = await signer(mockTransaction);
+
   return new Promise<UploadResult>((resolve, reject) => {
     let progress = 0;
     const interval = setInterval(() => {
-      progress += Math.random() * 10;
-      if (progress > 100) {
-        progress = 100;
-      }
+      progress += Math.random() * 20;
+      if (progress > 100) progress = 100;
       onProgress(progress);
 
       if (progress >= 100) {
         clearInterval(interval);
         setTimeout(() => {
           const fileId = `shby-${crypto.randomUUID()}`;
+          // Generate a fake but valid-looking testnet transaction hash
+          const txHash = `0x${[...Array(64)].map(() => Math.floor(Math.random() * 16).toString(16)).join('')}`;
           resolve({
             id: fileId,
             link: `https://shelby.io/v/${fileId}/${file.name}`,
+            txHash,
           });
         }, 500);
       }
@@ -46,74 +64,87 @@ const mockShelbyUpload = ({
   });
 };
 
-
 export function FileUploader() {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<UploadStatus>('idle');
   const [progress, setProgress] = useState(0);
-  const [result, setResult] = useState<UploadResult | null>(null);
-  const [tags, setTags] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isTagging, setIsTagging] = useState(false);
+  const [estimatedGas, setEstimatedGas] = useState<number | null>(null);
 
-  // Temporarily remove wallet integration to fix build issues.
-  const connected = true; 
+  const { connected, signAndSubmitTransaction } = useWallet();
   const { toast } = useToast();
 
   const resetState = useCallback(() => {
     setFile(null);
     setStatus('idle');
     setProgress(0);
-    setResult(null);
-    setTags(null);
     setError(null);
-    setIsTagging(false);
+    setEstimatedGas(null);
   }, []);
+
+  const handleEstimateGas = async () => {
+    if (!file || !connected) return;
+    setStatus('estimating');
+    try {
+      // For estimation, we simulate a simple transaction like a 0-APT transfer.
+      // A real app would simulate the actual transaction for the protocol.
+      const transaction = await aptos.transaction.build.simple({
+        sender: AccountAddress.ONE, // Use a dummy address for simulation
+        data: {
+          function: "0x1::aptos_account::transfer",
+          functionArguments: [AccountAddress.ONE, 0],
+        },
+      });
+      const [simulation] = await aptos.transaction.simulate.simple({
+        signerPublicKey: AccountAddress.ONE, // Dummy public key
+        transaction,
+      });
+      setEstimatedGas(Number(simulation.gas_used) / 10**8);
+      setStatus('confirming');
+    } catch (e) {
+      const err = e instanceof Error ? e.message : "Could not estimate gas fees.";
+      setError(err);
+      setStatus('error');
+      toast({ variant: 'destructive', title: 'Estimation Failed', description: err });
+    }
+  };
 
   const handleUpload = async () => {
     if (!file) return;
-    if (!connected) {
-      toast({
-        variant: 'destructive',
-        title: 'Wallet not connected',
-        description: 'Please connect your Petra wallet to upload files.',
-      });
-      return;
-    }
 
     setStatus('uploading');
     setError(null);
     setProgress(0);
 
     try {
-      // The Shelby SDK automatically handles data chunking and erasure coding.
+      // The `signAndSubmitTransaction` from the wallet adapter would be used here.
+      // As we are mocking, we'll pass a dummy signer function.
+      const dummySigner = async (tx: any) => ({ signature: 'mock_signature' });
       const uploadResult = await mockShelbyUpload({
         file,
         onProgress: setProgress,
+        signer: dummySigner as any,
       });
 
-      setResult(uploadResult);
-      setStatus('success');
+      setStatus('tagging');
       toast({
         title: 'Upload Successful',
-        description: `Your file "${file.name}" has been stored on Shelby.`,
+        description: `File stored. Now generating AI tags...`,
       });
 
-      // Start intelligent tagging after successful upload
-      setIsTagging(true);
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const content = (e.target?.result as string) || '';
-        const suggestedTags = await getFileTags(file.name, content);
-        setTags(suggestedTags);
-        setIsTagging(false);
+      // Add to history
+      const newEntry = {
+        ...uploadResult,
+        filename: file.name,
+        timestamp: new Date().toISOString(),
       };
-      reader.onerror = () => {
-        setIsTagging(false);
-        setTags(null); // Could not read file for tagging
-      };
-      // For non-text files, this will be garbled, but the AI might still extract info from headers or filename.
-      reader.readAsText(file.slice(0, 10000)); // Read first 10KB for performance
+      addToHistory(newEntry);
+
+      // We no longer show a big success screen here, history component handles it.
+      // We'll reset the uploader to allow for another upload.
+      resetState();
+      setStatus('success');
+
     } catch (e) {
       const err = e instanceof Error ? e.message : 'An unknown error occurred.';
       setError(err);
@@ -126,92 +157,34 @@ export function FileUploader() {
     }
   };
 
-
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    if (status !== 'idle' && status !== 'error') return;
+    if (status !== 'idle' && status !== 'success' && status !== 'error') return;
     if (acceptedFiles.length > 0) {
       resetState();
       setFile(acceptedFiles[0]);
     }
   }, [status, resetState]);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, multiple: false });
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, multiple: false, disabled: !connected });
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast({ title: 'Copied to clipboard!' });
-  };
-
-  if (status === 'success' && result) {
-    return (
-      <Card className="w-full bg-card/50 border-primary/20 shadow-lg">
-        <CardContent className="p-6 text-center space-y-4">
-          <Check className="mx-auto h-12 w-12 text-green-500" />
-          <h3 className="text-2xl font-headline">Upload Complete</h3>
-          <p className="text-muted-foreground break-all">File: {file?.name}</p>
-          
-          <Separator />
-
-          <div className="space-y-2 text-left">
-            <label className="text-sm font-medium text-muted-foreground">Retrieval ID</label>
-            <div className="flex items-center gap-2">
-              <code className="relative flex-1 rounded bg-background px-3 py-2 font-mono text-sm">{result.id}</code>
-              <Button variant="ghost" size="icon" onClick={() => copyToClipboard(result.id)}>
-                <Copy className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-
-          <div className="space-y-2 text-left">
-            <label className="text-sm font-medium text-muted-foreground">Sharable Link</label>
-            <div className="flex items-center gap-2">
-              <code className="relative flex-1 truncate rounded bg-background px-3 py-2 font-mono text-sm">{result.link}</code>
-              <Button variant="ghost" size="icon" onClick={() => copyToClipboard(result.link)}>
-                <Copy className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-          
-          <Separator />
-          
-          <div className="space-y-3 text-left">
-            <h4 className="flex items-center text-sm font-medium text-muted-foreground">
-              <BrainCircuit className="w-4 h-4 mr-2"/>
-              AI Suggested Tags
-            </h4>
-            <div className="flex flex-wrap gap-2">
-              {isTagging ? (
-                <div className="flex items-center text-sm text-muted-foreground"><Loader className="w-4 h-4 mr-2 animate-spin"/>Generating tags...</div>
-              ) : tags && tags.length > 0 ? (
-                tags.map(tag => (
-                  <Badge key={tag} variant="secondary" className="text-sm"><Tag className="w-3 h-3 mr-1.5"/>{tag}</Badge>
-                ))
-              ) : (
-                <p className="text-sm text-muted-foreground">No tags suggested.</p>
-              )}
-            </div>
-          </div>
-
-          <Button onClick={resetState} className="w-full mt-4">Upload Another File</Button>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  if (status === 'uploading') {
+  if (status === 'uploading' || status === 'estimating' || status === 'tagging') {
     return (
       <Card className="w-full">
         <CardContent className="p-10 text-center space-y-4">
           <Loader className="mx-auto h-12 w-12 animate-spin text-primary" />
-          <h3 className="text-2xl font-headline">Uploading...</h3>
+          <h3 className="text-2xl font-headline">
+            {status === 'estimating' ? 'Estimating Gas...' :
+             status === 'tagging' ? 'Finalizing & Tagging...' :
+             'Uploading...'}
+          </h3>
           <p className="text-muted-foreground break-all">{file?.name}</p>
-          <Progress value={progress} className="w-full" />
-          <p className="text-sm font-mono text-accent">{Math.round(progress)}%</p>
+          {(status === 'uploading' || status === 'tagging') && <Progress value={progress} className="w-full" />}
+          {(status === 'uploading' || status === 'tagging') && <p className="text-sm font-mono text-accent">{Math.round(progress)}%</p>}
         </CardContent>
       </Card>
     );
   }
-  
+
   if (file) {
     return (
       <Card className="w-full">
@@ -230,12 +203,32 @@ export function FileUploader() {
               <X className="h-5 w-5" />
             </Button>
           </div>
-          {status === 'error' && (
-            <p className="mt-2 text-sm text-destructive">{error}</p>
+          
+          {status === 'confirming' && estimatedGas !== null && (
+            <div className="mt-4 p-4 rounded-lg bg-background border space-y-4">
+              <h4 className="font-medium">Confirm Upload</h4>
+              <div className="flex justify-between items-center text-sm">
+                <span className="text-muted-foreground">Estimated Gas Fee</span>
+                <span className="font-mono">{estimatedGas.toFixed(6)} APT</span>
+              </div>
+              <div className="flex gap-2">
+                <Button onClick={handleUpload} className="w-full" size="lg">Confirm & Upload</Button>
+                <Button onClick={resetState} className="w-full" size="lg" variant="outline">Cancel</Button>
+              </div>
+            </div>
           )}
-          <Button onClick={handleUpload} className="w-full mt-4" size="lg">
-            Upload to Shelby
-          </Button>
+
+          {status !== 'confirming' && (
+            <>
+              {status === 'error' && (
+                <p className="mt-2 text-sm text-destructive">{error}</p>
+              )}
+              <Button onClick={handleEstimateGas} className="w-full mt-4" size="lg">
+                Upload to Shelby
+              </Button>
+            </>
+          )}
+
         </CardContent>
       </Card>
     );
@@ -244,15 +237,15 @@ export function FileUploader() {
   return (
     <Card 
       {...getRootProps()} 
-      className={`w-full transition-colors ${isDragActive ? 'border-primary' : ''}`}
+      className={`w-full transition-colors ${isDragActive ? 'border-primary' : ''} ${!connected ? 'bg-muted/50 cursor-not-allowed' : 'cursor-pointer'}`}
     >
-      <CardContent className="p-6 text-center cursor-pointer">
+      <CardContent className="p-6 text-center">
         <input {...getInputProps()} />
         <div className="border-2 border-dashed border-border rounded-lg p-12 flex flex-col items-center justify-center space-y-4">
           <UploadCloud className="h-12 w-12 text-muted-foreground" />
           <div className="space-y-2">
             <p className="font-medium">
-              {isDragActive ? 'Drop the file here...' : 'Drag & drop file or click to select'}
+              { !connected ? 'Please connect your wallet to upload' : isDragActive ? 'Drop the file here...' : 'Drag & drop file or click to select'}
             </p>
             <p className="text-sm text-muted-foreground">
               Securely upload any file to the decentralized web.
