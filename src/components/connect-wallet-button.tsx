@@ -12,10 +12,16 @@ import {
 import { useWallet } from '@aptos-labs/wallet-adapter-react';
 import { ChevronDown, Copy, LogOut } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { useEffect, useState } from 'react';
 
 export function ConnectWalletButton() {
   const { connect, disconnect, account, connected, wallets } = useWallet();
   const { toast } = useToast();
+  const [isClient, setIsClient] = useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -69,7 +75,7 @@ export function ConnectWalletButton() {
 
   return (
     <Button onClick={handleConnect}>
-      {petraWallet && <img src={petraWallet.icon} alt={petraWallet.name} width={24} height={24} className="mr-2" />}
+      {isClient && petraWallet && <img src={petraWallet.icon} alt={petraWallet.name} width={24} height={24} className="mr-2" />}
       Connect Petra
     </Button>
   );
