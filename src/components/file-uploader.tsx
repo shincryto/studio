@@ -32,7 +32,7 @@ export function FileUploader() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  const { connected, signTransaction, account } = useWallet();
+  const { connected, signAndSubmitTransaction, account } = useWallet();
   const { toast } = useToast();
 
   const resetState = useCallback(() => {
@@ -69,7 +69,7 @@ export function FileUploader() {
       setStatusText('Registering file on the Aptos blockchain...');
       const expirationMicroseconds = (Date.now() + 30 * 24 * 60 * 60 * 1000) * 1000;
       
-      const payload = ShelbyBlobClient.createRegisterBlobPayload({
+      const rawPayload = ShelbyBlobClient.createRegisterBlobPayload({
         account: account.address,
         blobName: file.name,
         blobMerkleRoot: commitments.blob_merkle_root,
@@ -78,16 +78,23 @@ export function FileUploader() {
         blobSize: BigInt(commitments.raw_data_size),
       });
 
-      const transaction: InputTransactionData = { data: payload };
-      const signedTransaction = await signTransaction(transaction);
-      const pendingTx = await aptos.submitTransaction({ transaction: signedTransaction });
+      // Convert to the new InputTransactionData format to be compatible with modern wallets (AIP-62)
+      const transaction: InputTransactionData = {
+        data: {
+          function: rawPayload.function,
+          typeArguments: rawPayload.type_arguments,
+          functionArguments: rawPayload.arguments,
+        }
+      };
+      
+      const pendingTx = await signAndSubmitTransaction(transaction);
       await aptos.waitForTransaction({ transactionHash: pendingTx.hash });
 
       // Step 3: Multipart RPC Upload
-      setStatus('uploading');
       const shelbyApiBase = 'https://api.testnet.shelby.xyz/shelby/v1';
 
       // 3a: Begin session
+      setStatus('uploading');
       setStatusText('Initializing upload session...');
       const beginResponse = await fetch(`${shelbyApiBase}/multipart-uploads`, {
         method: 'POST',

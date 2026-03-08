@@ -3,14 +3,13 @@ import type { FC, PropsWithChildren } from 'react';
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from '@/components/theme-provider';
 import { AptosWalletAdapterProvider } from '@aptos-labs/wallet-adapter-react';
-import { PetraWallet } from 'petra-plugin-wallet-adapter';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Network } from '@aptos-labs/ts-sdk';
 
 const queryClient = new QueryClient();
 
 export const AppProviders: FC<PropsWithChildren> = ({ children }) => {
-  const wallets = [new PetraWallet()];
+  const wallets = []; // Auto-detect installed wallets
   
   return (
     <QueryClientProvider client={queryClient}>
